@@ -1,0 +1,66 @@
+import pygame
+import time
+
+# 初始化
+pygame.init()
+pygame.joystick.init()
+
+joystick_count = pygame.joystick.get_count()
+if joystick_count == 0:
+    print("未检测到手柄!")
+    exit()
+
+joystick = pygame.joystick.Joystick(0)
+joystick.init()
+
+print(f"检测到手柄: {joystick.get_name()}")
+print(f"按钮数量: {joystick.get_numbuttons()}")
+print(f"摇杆数量: {joystick.get_numaxes()}")
+print(f"方向键数量: {joystick.get_numhats()}")
+print("请按下各个按钮，程序会显示对应的编号")
+print("按 Ctrl+C 退出\n")
+
+# 已知的Switch Pro按钮名称（按常见顺序）
+expected_buttons = [
+    "B", "A", "Y", "X",              # 主要按钮
+    "L", "R", "ZL", "ZR",            # 肩键和扳机
+    "Minus", "Plus",                 # 功能按钮
+    "LStick", "RStick",              # 摇杆按下
+    "Home", "Capture",               # 系统按钮
+    "Up", "Down", "Left", "Right"    # 方向键（可能作为按钮）
+]
+
+button_states = [False] * joystick.get_numbuttons()
+detected_mapping = {}
+
+try:
+    while True:
+        pygame.event.pump()
+        
+        for i in range(joystick.get_numbuttons()):
+            current_state = joystick.get_button(i)
+            
+            # 检测按钮按下
+            if current_state and not button_states[i]:
+                print(f"按钮编号 {i} 被按下")
+                # 请手动记录这个编号对应哪个物理按钮
+                
+            button_states[i] = current_state
+        
+        # 检测摇杆
+        for i in range(joystick.get_numaxes()):
+            axis_value = joystick.get_axis(i)
+            if abs(axis_value) > 0.8:
+                print(f"摇杆轴 {i}: {axis_value:.2f}")
+        
+        # 检测方向键
+        for i in range(joystick.get_numhats()):
+            hat_value = joystick.get_hat(i)
+            if hat_value != (0, 0):
+                print(f"方向键 {i}: {hat_value}")
+        
+        time.sleep(0.1)
+
+except KeyboardInterrupt:
+    pygame.quit()
+    print("\n检测结束")
