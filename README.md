@@ -20,4 +20,20 @@ XY 加速度：200
 // 用小鸡灵狐手柄、SwitchPro手柄，Switch2Pro手柄，反复测试下来，这套设置用的比较顺手。后面刷到 Apex 线性43的设置，发现数值很接近，看来手柄FPS，受摇杆限制，有物理最优解。
 // 其他手柄，可根据个人习惯微调各项参数，找到最适合自己的灵敏度配置。一般摇杆回弹力度越大，灵敏度可以越高。例如，小鸡灵狐这种摇杆回弹比较轻盈的，可以灵敏度降低一点。
 
-通过软硬件结合优化，Switch Pro 手柄能够更好地满足 FPS 游戏对精度的要求，提升游戏体验。
+***
+### 如何使用
+0. 用网页脚本，激活 Switch 2 Pro 手柄的开发者模式，让电脑可以识别出手柄
+   https://handheldlegend.github.io/procon2tool/
+
+1. 在电脑上安装Python，安装勾选 pip
+   
+2. 打开 PC 自带的终端工具。用 pip install 命令，安装 pygame 和 vgamepad，前者用于虚拟 Xbox 360 手柄，后者用于发送键盘键值
+pip install pygame
+pip install vgamepad
+
+3. 在终端工具中输入 python 加文件路径，执行手柄脚本
+PS C:\Users\Admin> python .\Desktop\Switch2ProControllerWorkOnPC\ControllerKayValueTest.txt
+
+
+### 检测手柄键值
+项目中有检测手柄键值的脚本 ControllerKayValueTest.txt，如果有键值不匹配的问题，可以运行这个脚本，记下来键值对应的数字，在之前的主脚本中改到对应的键上。
