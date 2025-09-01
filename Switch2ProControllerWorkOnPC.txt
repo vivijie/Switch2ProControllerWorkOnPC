@@ -1,0 +1,402 @@
+import pygame
+import time
+import threading
+from collections import deque
+from vgamepad import VX360Gamepad, XUSB_BUTTON
+
+# ==================== 配置区域 ====================
+# 摇杆物理限制校准
+JOYSTICK_PHYSICAL_LIMITS = {
+    'left': {'min_x': -0.83, 'max_x': 0.83, 'min_y': -0.71, 'max_y': 0.83},
+    'right': {'min_x': -0.76, 'max_x': 0.8, 'min_y': -0.71, 'max_y': 0.83}
+}
+
+# 死区配置
+DEADZONE_CONFIG = {
+    'deadzone': 0.03,
+    'outer_threshold': 1.0,
+    'response_curve': 1.0
+}
+
+# 更新率配置
+UPDATE_RATE = 1000  # Hz
+
+# 按钮映射
+PHYSICAL_TO_NAME = {
+    0: "A", 1: "B", 2: "X", 3: "Y",
+    4: "R", 5: "ZR", 6: "Plus", 7: "RStick",
+    8: "Down", 9: "Right", 10: "Left", 11: "Up",
+    12: "L", 13: "ZL", 14: "Min", 15: "LStick",
+    16: "Home", 17: "Capture",
+    18: "BR", 19: "BL"
+}
+
+NAME_TO_XBOX = {
+    "BR": XUSB_BUTTON.XUSB_GAMEPAD_B,
+    "BL": XUSB_BUTTON.XUSB_GAMEPAD_A,
+    "A": XUSB_BUTTON.XUSB_GAMEPAD_A,
+    "B": XUSB_BUTTON.XUSB_GAMEPAD_B,
+    "X": XUSB_BUTTON.XUSB_GAMEPAD_X,
+    "Y": XUSB_BUTTON.XUSB_GAMEPAD_Y,
+    "L": XUSB_BUTTON.XUSB_GAMEPAD_LEFT_SHOULDER,
+    "R": XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_SHOULDER,
+    "Min": XUSB_BUTTON.XUSB_GAMEPAD_BACK,
+    "Plus": XUSB_BUTTON.XUSB_GAMEPAD_START,
+    "Home": XUSB_BUTTON.XUSB_GAMEPAD_START,
+    "Capture": XUSB_BUTTON.XUSB_GAMEPAD_BACK,
+    "LStick": XUSB_BUTTON.XUSB_GAMEPAD_LEFT_THUMB,
+    "RStick": XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_THUMB,
+    "Up": XUSB_BUTTON.XUSB_GAMEPAD_DPAD_UP,
+    "Down": XUSB_BUTTON.XUSB_GAMEPAD_DPAD_DOWN,
+    "Left": XUSB_BUTTON.XUSB_GAMEPAD_DPAD_LEFT,
+    "Right": XUSB_BUTTON.XUSB_GAMEPAD_DPAD_RIGHT,
+    "ZL": "left_trigger",
+    "ZR": "right_trigger"
+}
+
+# 特殊按键配置
+SPECIAL_BUTTONS = {
+    17: {'key': 't', 'description': 'Capture按钮映射为键盘T键'}
+}
+
+# ==================== 初始化 ====================
+pygame.init()
+pygame.joystick.init()
+virtual_gamepad = VX360Gamepad()
+
+joystick_count = pygame.joystick.get_count()
+if joystick_count == 0:
+    print("未检测到手柄!")
+    exit()
+
+joystick = pygame.joystick.Joystick(0)
+joystick.init()
+
+print(f"检测到手柄: {joystick.get_name()}")
+print("按钮数量:", joystick.get_numbuttons())
+print("按 Ctrl+C 退出")
+
+# 创建物理到XBOX的映射
+PHYSICAL_TO_XBOX = {}
+for physical_idx, button_name in PHYSICAL_TO_NAME.items():
+    if button_name in NAME_TO_XBOX:
+        PHYSICAL_TO_XBOX[physical_idx] = NAME_TO_XBOX[button_name]
+
+# 按钮状态数组
+button_states = [False] * 25
+trigger_states = {'left': 0.0, 'right': 0.0}
+
+# ==================== 终端显示函数 ====================
+def print_configuration_info():
+    """打印漂亮的配置信息"""
+    print("\n" + "="*60)
+    print("🎮 手柄映射配置信息".center(60))
+    print("="*60)
+    
+    # 死区配置显示
+    print("\n📊 死区配置:")
+    deadzone_bar = "[" + "■" * int(DEADZONE_CONFIG['deadzone'] * 20) + "○" * (20 - int(DEADZONE_CONFIG['deadzone'] * 20)) + "]"
+    print(f"   死区大小: {DEADZONE_CONFIG['deadzone']:.3f} {deadzone_bar}")
+    print(f"   外环阈值: {DEADZONE_CONFIG['outer_threshold']:.2f}")
+    print(f"   响应曲线: {DEADZONE_CONFIG['response_curve']:.1f}")
+    
+    # 摇杆范围显示
+    print("\n🎯 摇杆物理范围:")
+    for stick, limits in JOYSTICK_PHYSICAL_LIMITS.items():
+        stick_name = "左摇杆" if stick == 'left' else "右摇杆"
+        print(f"   {stick_name}: X[{limits['min_x']:+.2f} ↔ {limits['max_x']:+.2f}] "
+              f"Y[{limits['min_y']:+.2f} ↔ {limits['max_y']:+.2f}]")
+    
+    # 更新率显示
+    print(f"\n⚡ 更新率: {UPDATE_RATE}Hz")
+    
+    # 特殊按钮显示
+    print("\n🔧 特殊功能按钮:")
+    for btn_id, config in SPECIAL_BUTTONS.items():
+        btn_name = PHYSICAL_TO_NAME.get(btn_id, f"Btn{btn_id}")
+        print(f"   {btn_name}({btn_id}) → {config['description']}")
+    
+    # 按钮映射显示
+    print("\n🎯 按钮映射表:")
+    print("   ╔═════╦══════╦══════════════╗")
+    print("   ║ 编号 ║ 名称 ║   映射到     ║")
+    print("   ╠═════╬══════╬══════════════╣")
+    
+    for i in range(min(20, len(PHYSICAL_TO_NAME))):
+        if i in PHYSICAL_TO_NAME:
+            btn_name = PHYSICAL_TO_NAME[i]
+            xbox_map = "扳机" if btn_name in ["ZL", "ZR"] else "按钮"
+            print(f"   ║  {i:2d} ║  {btn_name:3s} ║ {xbox_map:12s} ║")
+    
+    print("   ╚═════╩══════╩══════════════╝")
+    
+    # 摇杆示意图
+    print("\n🕹️  摇杆死区示意图:")
+    print("   " + " " * 10 + "↑ Y+")
+    print("   " + " " * 8 + "╔═════╗")
+    print("   " + " " * 8 + "║  ○  ║ ← 死区范围")
+    print("   " + " " * 8 + "╚═════╝")
+    print("   ← X-" + " " * 6 + "中心" + " " * 6 + "X+ →")
+    print("   " + " " * 8 + "╔═════╗")
+    print("   " + " " * 8 + "║  ○  ║ ← 死区范围")
+    print("   " + " " * 8 + "╚═════╝")
+    print("   " + " " * 10 + "↓ Y-")
+    
+    print("\n" + "="*60)
+    print("🚀 手柄映射已启动，开始享受游戏吧！".center(60))
+    print("="*60 + "\n")
+
+# ==================== 摇杆范围优化类 ====================
+class JoystickRangeOptimizer:
+    def __init__(self, physical_limits):
+        self.physical_limits = physical_limits
+        
+    def normalize_joystick_value(self, value, axis_type, stick_type):
+        """将物理摇杆值归一化到[-1, 1]范围"""
+        limits = self.physical_limits[stick_type]
+        
+        if axis_type == 'x':
+            # 将x轴从[-0.83, 0.83]映射到[-1, 1]
+            if value < 0:
+                normalized = value / abs(limits['min_x'])
+            else:
+                normalized = value / limits['max_x']
+        else:  # y轴
+            # 将y轴从[-0.71, 0.83]映射到[-1, 1]
+            if value < 0:
+                normalized = value / abs(limits['min_y'])
+            else:
+                normalized = value / limits['max_y']
+                
+        # 确保值在[-1, 1]范围内
+        return max(-1.0, min(1.0, normalized))
+
+# ==================== 死区处理类 ====================
+class AdvancedDeadzone:
+    def __init__(self, deadzone=0.08, outer_threshold=0.95, response_curve=1.0):
+        self.deadzone = deadzone
+        self.outer_threshold = outer_threshold
+        self.response_curve = response_curve
+
+    def apply_circular_deadzone(self, x, y):
+        """圆形死区处理"""
+        magnitude = (x**2 + y**2) ** 0.5
+
+        if magnitude < self.deadzone:
+            return 0.0, 0.0
+
+        # 应用响应曲线
+        if self.response_curve != 1.0:
+            normalized = (magnitude - self.deadzone) / (1.0 - self.deadzone)
+            scaled_magnitude = normalized ** self.response_curve
+            magnitude = scaled_magnitude * (1.0 - self.deadzone) + self.deadzone
+
+        # 限制最大输出
+        magnitude = min(magnitude, 1.0)
+
+        # 保持方向，应用缩放后的幅度
+        if magnitude > 0:
+            scale = magnitude / (x**2 + y**2) ** 0.5
+            return x * scale, y * scale
+
+        return x, y
+
+# ==================== 初始化处理器 ====================
+joystick_optimizer = JoystickRangeOptimizer(JOYSTICK_PHYSICAL_LIMITS)
+deadzone_processor = AdvancedDeadzone(**DEADZONE_CONFIG)
+
+# 摇杆数据缓存
+stick_data_cache = {
+    'left': {'x': 0.0, 'y': 0.0},
+    'right': {'x': 0.0, 'y': 0.0}
+}
+
+# 高精度定时器
+last_update_time = time.perf_counter()
+update_interval = 1.0 / UPDATE_RATE
+
+# ==================== 处理函数 ====================
+def process_joysticks_optimized(joystick):
+    """优化的摇杆处理，包括范围归一化"""
+    global stick_data_cache
+
+    if joystick.get_numaxes() < 4:
+        return
+
+    try:
+        # 读取原始摇杆数据
+        left_x = joystick.get_axis(0)
+        left_y = joystick.get_axis(1)
+        right_x = joystick.get_axis(2)
+        right_y = joystick.get_axis(3)
+
+        # 应用范围归一化
+        left_x = joystick_optimizer.normalize_joystick_value(left_x, 'x', 'left')
+        left_y = joystick_optimizer.normalize_joystick_value(left_y, 'y', 'left')
+        right_x = joystick_optimizer.normalize_joystick_value(right_x, 'x', 'right')
+        right_y = joystick_optimizer.normalize_joystick_value(right_y, 'y', 'right')
+
+        # 应用死区算法
+        left_x, left_y = deadzone_processor.apply_circular_deadzone(left_x, left_y)
+        right_x, right_y = deadzone_processor.apply_circular_deadzone(right_x, right_y)
+
+        # 更新缓存
+        stick_data_cache['left']['x'] = left_x
+        stick_data_cache['left']['y'] = left_y
+        stick_data_cache['right']['x'] = right_x
+        stick_data_cache['right']['y'] = right_y
+
+    except Exception as e:
+        print(f"摇杆读取错误: {e}")
+
+def process_trigger_buttons():
+    """处理扳机按钮（按钮5和13）"""
+    global trigger_states
+
+    try:
+        # 右扳机按钮 (ZR - 按钮5)
+        zr_pressed = bool(joystick.get_button(5))
+        trigger_states['right'] = 1.0 if zr_pressed else 0.0
+
+        # 左扳机按钮 (ZL - 按钮13)
+        zl_pressed = bool(joystick.get_button(13))
+        trigger_states['left'] = 1.0 if zl_pressed else 0.0
+
+    except Exception as e:
+        print(f"扳机按钮读取错误: {e}")
+
+def update_virtual_gamepad():
+    """高速更新虚拟手柄"""
+    global last_update_time
+
+    while True:
+        current_time = time.perf_counter()
+        elapsed = current_time - last_update_time
+
+        if elapsed >= update_interval:
+            try:
+                # 设置摇杆
+                left = stick_data_cache['left']
+                right = stick_data_cache['right']
+
+                virtual_gamepad.left_joystick_float(left['x'], left['y'])
+                virtual_gamepad.right_joystick_float(right['x'], right['y'])
+
+                # 设置扳机
+                virtual_gamepad.left_trigger_float(trigger_states['left'])
+                virtual_gamepad.right_trigger_float(trigger_states['right'])
+
+                virtual_gamepad.update()
+                last_update_time = current_time
+
+            except Exception as e:
+                print(f"虚拟手柄更新错误: {e}")
+
+        time.sleep(0.001)
+
+# ==================== 主程序 ====================
+# 启动高速更新线程
+update_thread = threading.Thread(target=update_virtual_gamepad, daemon=True)
+update_thread.start()
+
+# 检查pyautogui可用性
+try:
+    import pyautogui
+    USE_PYAUTOGUI = True
+    print("使用pyautogui进行键盘模拟")
+except ImportError:
+    USE_PYAUTOGUI = False
+    print("pyautogui未安装，使用pygame事件模拟")
+    print("安装pyautogui: pip install pyautogui")
+
+# 打印配置信息
+print_configuration_info()
+
+try:
+    print(f"优化版手柄映射已启动（{UPDATE_RATE}Hz 更新率）")
+    print("摇杆范围已优化，物理限制已补偿")
+    print("扳机按钮: ZL=按钮13, ZR=按钮5")
+    
+    # 打印特殊按钮配置
+    for btn_id, config in SPECIAL_BUTTONS.items():
+        print(f"按钮{btn_id}: {config['description']}")
+
+    while True:
+        pygame.event.pump()
+
+        # 处理所有按钮
+        num_buttons = min(joystick.get_numbuttons(), 25)
+        for i in range(num_buttons):
+            try:
+                current_state = bool(joystick.get_button(i))
+            except:
+                current_state = False
+
+            if current_state != button_states[i]:
+                button_name = PHYSICAL_TO_NAME.get(i, f"Btn{i}")
+
+                # 特殊按钮处理（如Capture按钮）
+                if i in SPECIAL_BUTTONS:
+                    config = SPECIAL_BUTTONS[i]
+                    if current_state:
+                        # 按下特殊按钮
+                        if USE_PYAUTOGUI:
+                            pyautogui.keyDown(config['key'])
+                        else:
+                            key_event = pygame.event.Event(pygame.KEYDOWN, key=getattr(pygame, f"K_{config['key']}"))
+                            pygame.event.post(key_event)
+                        print(f"按下: {button_name} -> 键盘{config['key'].upper()}键按下")
+                    else:
+                        # 释放特殊按钮
+                        if USE_PYAUTOGUI:
+                            pyautogui.keyUp(config['key'])
+                        else:
+                            key_event = pygame.event.Event(pygame.KEYUP, key=getattr(pygame, f"K_{config['key']}"))
+                            pygame.event.post(key_event)
+                        print(f"释放: {button_name} -> 键盘{config['key'].upper()}键释放")
+                    
+                    button_states[i] = current_state
+                    continue
+
+                # 普通按钮处理
+                if i in PHYSICAL_TO_XBOX:
+                    target = PHYSICAL_TO_XBOX[i]
+
+                    if isinstance(target, XUSB_BUTTON):
+                        # 普通按钮
+                        if current_state:
+                            virtual_gamepad.press_button(target)
+                            print(f"按下: {button_name}")
+                        else:
+                            virtual_gamepad.release_button(target)
+                            print(f"释放: {button_name}")
+
+                    elif isinstance(target, str) and target in ['left_trigger', 'right_trigger']:
+                        # 扳机按钮（特殊处理）
+                        if current_state:
+                            print(f"按下扳机: {button_name}")
+                        else:
+                            print(f"释放扳机: {button_name}")
+
+                button_states[i] = current_state
+
+        # 处理pygame事件队列（如果使用pygame模拟）
+        if not USE_PYAUTOGUI:
+            for event in pygame.event.get():
+                # 让pygame处理我们发送的键盘事件
+                if event.type in (pygame.KEYDOWN, pygame.KEYUP):
+                    pass
+
+        # 处理扳机按钮状态
+        process_trigger_buttons()
+
+        # 处理摇杆
+        process_joysticks_optimized(joystick)
+
+        time.sleep(0.001)
+
+except KeyboardInterrupt:
+    virtual_gamepad.reset()
+    virtual_gamepad.update()
+    pygame.quit()
+    print("\n🎮 程序已退出，感谢使用！")
