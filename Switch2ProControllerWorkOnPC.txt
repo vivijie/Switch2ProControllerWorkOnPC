@@ -1,21 +1,34 @@
 import pygame
 import time
 import threading
+import math
 from collections import deque
 from vgamepad import VX360Gamepad, XUSB_BUTTON
 
 # ==================== 配置区域 ====================
-# 摇杆物理限制校准
-JOYSTICK_PHYSICAL_LIMITS = {
-    'left': {'min_x': -0.83, 'max_x': 0.83, 'min_y': -0.71, 'max_y': 0.83},
-    'right': {'min_x': -0.76, 'max_x': 0.8, 'min_y': -0.71, 'max_y': 0.83}
+# 默认摇杆物理限制校准（防呆设计，使用0.8作为安全值）
+DEFAULT_PHYSICAL_LIMITS = {
+    'left': {'min_x': -0.8, 'max_x': 0.8, 'min_y': -0.8, 'max_y': 0.8},
+    'right': {'min_x': -0.8, 'max_x': 0.8, 'min_y': -0.8, 'max_y': 0.8}
 }
 
 # 死区配置
 DEADZONE_CONFIG = {
     'deadzone': 0.03,
-    'outer_threshold': 1.0,
+    'outer_threshold': 0.9,
     'response_curve': 1.0
+}
+
+# 方形死区开关配置 (0=关闭, 1=开启)
+SQUARE_DEADZONE_SWITCH = {
+    'left_stick': 1,   # 左摇杆方形死区开关
+    'right_stick': 0   # 右摇杆方形死区开关
+}
+
+# 摇杆输出增幅配置 (1.0=无增幅, 1.1=10%增幅, 0.9=10%衰减)
+OUTPUT_AMPLIFIER = {
+    'left_stick': 1.0,   # 左摇杆输出增幅
+    'right_stick': 1.0    # 右摇杆输出增幅
 }
 
 # 更新率配置
@@ -86,8 +99,112 @@ for physical_idx, button_name in PHYSICAL_TO_NAME.items():
 button_states = [False] * 25
 trigger_states = {'left': 0.0, 'right': 0.0}
 
+# ==================== 摇杆范围自动识别函数 ====================
+def calibrate_joystick_range():
+    """自动识别摇杆物理范围 - 同时校准左右摇杆"""
+    print("\n" + "="*60)
+    print("🎮 摇杆范围自动识别".center(60))
+    print("="*60)
+    print("请同时转动左右摇杆3圈，覆盖所有方向")
+    print("确保摇杆移动到各个角落")
+    print("10秒后自动完成校准")
+    print("="*60)
+    
+    # 初始化范围数据（从当前值开始，而不是默认值）
+    calibration_data = {
+        'left': {'min_x': 0.0, 'max_x': 0.0, 'min_y': 0.0, 'max_y': 0.0},
+        'right': {'min_x': 0.0, 'max_x': 0.0, 'min_y': 0.0, 'max_y': 0.0}
+    }
+    
+    # 检查摇杆数量
+    if joystick.get_numaxes() < 4:
+        print("错误: 摇杆轴数量不足，使用默认范围")
+        return DEFAULT_PHYSICAL_LIMITS
+    
+    # 先读取一次初始值来初始化范围
+    try:
+        pygame.event.pump()
+        calibration_data['left']['min_x'] = calibration_data['left']['max_x'] = joystick.get_axis(0)
+        calibration_data['left']['min_y'] = calibration_data['left']['max_y'] = joystick.get_axis(1)
+        calibration_data['right']['min_x'] = calibration_data['right']['max_x'] = joystick.get_axis(2)
+        calibration_data['right']['min_y'] = calibration_data['right']['max_y'] = joystick.get_axis(3)
+    except:
+        print("初始化读取失败，使用默认范围")
+        return DEFAULT_PHYSICAL_LIMITS
+    
+    print("\n🔄 正在校准摇杆范围...")
+    print("请同时转动左右摇杆3圈")
+    
+    start_time = time.time()
+    calibration_time = 8  # 校准时间增加到10秒
+    
+    while time.time() - start_time < calibration_time:
+        pygame.event.pump()
+        
+        try:
+            # 同时读取左右摇杆原始数据
+            left_x = joystick.get_axis(0)
+            left_y = joystick.get_axis(1)
+            right_x = joystick.get_axis(2)
+            right_y = joystick.get_axis(3)
+            
+            # 更新左摇杆最小值最大值 - 直接更新，不设限制
+            calibration_data['left']['min_x'] = min(calibration_data['left']['min_x'], left_x)
+            calibration_data['left']['max_x'] = max(calibration_data['left']['max_x'], left_x)
+            calibration_data['left']['min_y'] = min(calibration_data['left']['min_y'], left_y)
+            calibration_data['left']['max_y'] = max(calibration_data['left']['max_y'], left_y)
+            
+            # 更新右摇杆最小值最大值 - 直接更新，不设限制
+            calibration_data['right']['min_x'] = min(calibration_data['right']['min_x'], right_x)
+            calibration_data['right']['max_x'] = max(calibration_data['right']['max_x'], right_x)
+            calibration_data['right']['min_y'] = min(calibration_data['right']['min_y'], right_y)
+            calibration_data['right']['max_y'] = max(calibration_data['right']['max_y'], right_y)
+            
+            # 显示当前进度
+            remaining_time = calibration_time - (time.time() - start_time)
+            print(f"\r校准中... {remaining_time:.1f}秒 左:[X{calibration_data['left']['min_x']:+.3f}↔{calibration_data['left']['max_x']:+.3f} Y{calibration_data['left']['min_y']:+.3f}↔{calibration_data['left']['max_y']:+.3f}] 右:[X{calibration_data['right']['min_x']:+.3f}↔{calibration_data['right']['max_x']:+.3f} Y{calibration_data['right']['min_y']:+.3f}↔{calibration_data['right']['max_y']:+.3f}]", 
+                  end="", flush=True)
+            
+            time.sleep(0.01)
+            
+        except Exception as e:
+            print(f"\n校准错误: {e}")
+            # 出错时使用当前已读取的数据，不退回默认值
+            break
+    
+    # 验证校准结果的有效性 - 放宽验证条件
+    for stick in ['left', 'right']:
+        limits = calibration_data[stick]
+        
+        # 检查是否读取到了有效数据（只要不是全0就认为有效）
+        if (abs(limits['min_x']) < 0.01 and abs(limits['max_x']) < 0.01 and
+            abs(limits['min_y']) < 0.01 and abs(limits['max_y']) < 0.01):
+            print(f"\n⚠️  {stick}摇杆未检测到有效移动，使用默认范围")
+            calibration_data[stick] = DEFAULT_PHYSICAL_LIMITS[stick].copy()
+        else:
+            # 确保最小值确实小于最大值（处理初始化问题）
+            if limits['min_x'] > limits['max_x']:
+                limits['min_x'], limits['max_x'] = limits['max_x'], limits['min_x']
+            if limits['min_y'] > limits['max_y']:
+                limits['min_y'], limits['max_y'] = limits['max_y'], limits['min_y']
+    
+    print("\n\n✅ 摇杆校准完成!")
+    
+    # 显示最终校准结果
+    print("\n" + "="*60)
+    print("🎯 校准结果".center(60))
+    print("="*60)
+    for stick, limits in calibration_data.items():
+        stick_name = "左摇杆" if stick == 'left' else "右摇杆"
+        print(f"{stick_name}: X[{limits['min_x']:+.3f} ↔ {limits['max_x']:+.3f}] "
+              f"Y[{limits['min_y']:+.3f} ↔ {limits['max_y']:+.3f}]")
+    
+    print("="*60)
+    
+    return calibration_data
+
 # ==================== 终端显示函数 ====================
-def print_configuration_info():
+def print_configuration_info(physical_limits):
     """打印漂亮的配置信息"""
     print("\n" + "="*60)
     print("🎮 手柄映射配置信息".center(60))
@@ -98,14 +215,65 @@ def print_configuration_info():
     deadzone_bar = "[" + "■" * int(DEADZONE_CONFIG['deadzone'] * 20) + "○" * (20 - int(DEADZONE_CONFIG['deadzone'] * 20)) + "]"
     print(f"   死区大小: {DEADZONE_CONFIG['deadzone']:.3f} {deadzone_bar}")
     print(f"   外环阈值: {DEADZONE_CONFIG['outer_threshold']:.2f}")
-    print(f"   响应曲线: {DEADZONE_CONFIG['response_curve']:.1f}")
+    
+    # 响应曲线显示
+    print(f"\n📈 响应曲线: {DEADZONE_CONFIG['response_curve']:.1f}")
+    response_level = int(DEADZONE_CONFIG['response_curve'] * 10)
+    if DEADZONE_CONFIG['response_curve'] == 1.0:
+        curve_bar = "[════════════════════] 线性"
+    elif DEADZONE_CONFIG['response_curve'] < 1.0:
+        curve_bar = "[" + ">" * response_level + "─" * (20 - response_level) + "] 激进"
+    else:
+        curve_bar = "[" + "─" * 10 + ">" * (response_level - 10) + "─" * (20 - response_level) + "] 平滑"
+    print(f"   {curve_bar}")
+    
+    # 方形死区开关显示
+    print("\n🔲 方形死区开关:")
+    left_status = "■ 开启" if SQUARE_DEADZONE_SWITCH['left_stick'] else "□ 关闭"
+    right_status = "■ 开启" if SQUARE_DEADZONE_SWITCH['right_stick'] else "□ 关闭"
+    print(f"   左摇杆: {left_status}")
+    print(f"   右摇杆: {right_status}")
+    
+    # 输出增幅显示
+    print("\n📊 输出增幅:")
+    left_amp = f"{OUTPUT_AMPLIFIER['left_stick']:.1f}x"
+    right_amp = f"{OUTPUT_AMPLIFIER['right_stick']:.1f}x"
+    left_amp_bar = "[" + "■" * int((OUTPUT_AMPLIFIER['left_stick'] - 0.5) * 20) + "○" * (20 - int((OUTPUT_AMPLIFIER['left_stick'] - 0.5) * 20)) + "]"
+    right_amp_bar = "[" + "■" * int((OUTPUT_AMPLIFIER['right_stick'] - 0.5) * 20) + "○" * (20 - int((OUTPUT_AMPLIFIER['right_stick'] - 0.5) * 20)) + "]"
+    print(f"   左摇杆: {left_amp} {left_amp_bar}")
+    print(f"   右摇杆: {right_amp} {right_amp_bar}")
     
     # 摇杆范围显示
     print("\n🎯 摇杆物理范围:")
-    for stick, limits in JOYSTICK_PHYSICAL_LIMITS.items():
+    for stick, limits in physical_limits.items():
         stick_name = "左摇杆" if stick == 'left' else "右摇杆"
-        print(f"   {stick_name}: X[{limits['min_x']:+.2f} ↔ {limits['max_x']:+.2f}] "
-              f"Y[{limits['min_y']:+.2f} ↔ {limits['max_y']:+.2f}]")
+        print(f"   {stick_name}: X[{limits['min_x']:+.3f} ↔ {limits['max_x']:+.3f}] "
+              f"Y[{limits['min_y']:+.3f} ↔ {limits['max_y']:+.3f}]")
+    
+    # 摇杆死区示意图 - 合并显示左右摇杆
+    print("\n🕹️  摇杆死区示意图:")
+    
+    # 左摇杆示意图
+    print("   " + " " * 10 + "左摇杆" + " " * 21 + "右摇杆")
+    print("   " + " " * 8 + "╔═════════════╗" + " " * 5 + "╔═════════════╗")
+    print("   " + " " * 8 + "║      ↑      ║" + " " * 5 + "║      ↑      ║")
+    print("   " + " " * 8 + "║     Y+      ║" + " " * 5 + "║     Y+      ║")
+    print("   " + " " * 5 + "← X- ║     ○     ║ X+ →" + " " * 5 + "← X- ║     ○     ║ X+ →")
+    print("   " + " " * 8 + "║     Y-      ║" + " " * 5 + "║     Y-      ║")
+    print("   " + " " * 8 + "║      ↓      ║" + " " * 5 + "║      ↓      ║")
+    print("   " + " " * 8 + "╚═════════════╝" + " " * 5 + "╚═════════════╝")
+    
+    # 死区范围标注
+    print(f"   中心死区: {DEADZONE_CONFIG['deadzone']:.3f}" + " " * 18 + f"中心死区: {DEADZONE_CONFIG['deadzone']:.3f}")
+    print(f"   外围死区: {DEADZONE_CONFIG['outer_threshold']:.2f}" + " " * 18 + f"外围死区: {DEADZONE_CONFIG['outer_threshold']:.2f}")
+    
+    # 形状标注
+    left_shape = "方形" if SQUARE_DEADZONE_SWITCH['left_stick'] else "圆形"
+    right_shape = "方形" if SQUARE_DEADZONE_SWITCH['right_stick'] else "圆形"
+    print(f"   输出形状: {left_shape}" + " " * 20 + f"输出形状: {right_shape}")
+    
+    # 增幅标注
+    print(f"   输出增幅: {OUTPUT_AMPLIFIER['left_stick']:.1f}x" + " " * 19 + f"输出增幅: {OUTPUT_AMPLIFIER['right_stick']:.1f}x")
     
     # 更新率显示
     print(f"\n⚡ 更新率: {UPDATE_RATE}Hz")
@@ -130,18 +298,6 @@ def print_configuration_info():
     
     print("   ╚═════╩══════╩══════════════╝")
     
-    # 摇杆示意图
-    print("\n🕹️  摇杆死区示意图:")
-    print("   " + " " * 10 + "↑ Y+")
-    print("   " + " " * 8 + "╔═════╗")
-    print("   " + " " * 8 + "║  ○  ║ ← 死区范围")
-    print("   " + " " * 8 + "╚═════╝")
-    print("   ← X-" + " " * 6 + "中心" + " " * 6 + "X+ →")
-    print("   " + " " * 8 + "╔═════╗")
-    print("   " + " " * 8 + "║  ○  ║ ← 死区范围")
-    print("   " + " " * 8 + "╚═════╝")
-    print("   " + " " * 10 + "↓ Y-")
-    
     print("\n" + "="*60)
     print("🚀 手柄映射已启动，开始享受游戏吧！".center(60))
     print("="*60 + "\n")
@@ -152,21 +308,37 @@ class JoystickRangeOptimizer:
         self.physical_limits = physical_limits
         
     def normalize_joystick_value(self, value, axis_type, stick_type):
-        """将物理摇杆值归一化到[-1, 1]范围"""
+        """将物理摇杆值归一化到[-1, 1]范围 - 使用准确的物理范围"""
         limits = self.physical_limits[stick_type]
         
         if axis_type == 'x':
-            # 将x轴从[-0.83, 0.83]映射到[-1, 1]
+            # 将x轴从实际物理范围映射到[-1, 1]
             if value < 0:
-                normalized = value / abs(limits['min_x'])
+                # 负方向：从[min_x, 0]映射到[-1, 0]
+                if abs(limits['min_x']) > 0.001:  # 避免除零
+                    normalized = value / abs(limits['min_x'])
+                else:
+                    normalized = value  # 如果最小值为0，直接使用原值
             else:
-                normalized = value / limits['max_x']
+                # 正方向：从[0, max_x]映射到[0, 1]
+                if abs(limits['max_x']) > 0.001:  # 避免除零
+                    normalized = value / limits['max_x']
+                else:
+                    normalized = value  # 如果最大值为0，直接使用原值
         else:  # y轴
-            # 将y轴从[-0.71, 0.83]映射到[-1, 1]
+            # 将y轴从实际物理范围映射到[-1, 1]
             if value < 0:
-                normalized = value / abs(limits['min_y'])
+                # 负方向：从[min_y, 0]映射到[-1, 0]
+                if abs(limits['min_y']) > 0.001:  # 避免除零
+                    normalized = value / abs(limits['min_y'])
+                else:
+                    normalized = value  # 如果最小值为0，直接使用原值
             else:
-                normalized = value / limits['max_y']
+                # 正方向：从[0, max_y]映射到[0, 1]
+                if abs(limits['max_y']) > 0.001:  # 避免除零
+                    normalized = value / limits['max_y']
+                else:
+                    normalized = value  # 如果最大值为0，直接使用原值
                 
         # 确保值在[-1, 1]范围内
         return max(-1.0, min(1.0, normalized))
@@ -177,6 +349,57 @@ class AdvancedDeadzone:
         self.deadzone = deadzone
         self.outer_threshold = outer_threshold
         self.response_curve = response_curve
+
+    def apply_square_deadzone(self, x, y):
+        """方形死区处理 - 优化版：先形状后范围"""
+        # 计算最大绝对值（方形区域的关键）
+        max_abs = max(abs(x), abs(y))
+        
+        # 如果最大绝对值小于死区，返回0（在死区内）
+        if max_abs < self.deadzone:
+            return 0.0, 0.0
+
+        # 第一步：应用方形形状（先保持完整方形）
+        if max_abs > 0:
+            # 计算缩放比例 - 保持方形形状
+            if abs(x) > 0.0001 or abs(y) > 0.0001:  # 避免除零
+                # 找到主导轴（x或y中绝对值较大的）
+                if abs(x) > abs(y):
+                    # x轴主导，保持x的比例，相应缩放y
+                    scale = 1.0 / abs(x)  # 先缩放到完整方形
+                    new_x = math.copysign(1.0, x)
+                    new_y = y * scale
+                else:
+                    # y轴主导，保持y的比例，相应缩放x
+                    scale = 1.0 / abs(y)  # 先缩放到完整方形
+                    new_x = x * scale
+                    new_y = math.copysign(1.0, y)
+                
+                # 确保不会超出[-1, 1]范围
+                new_x = max(-1.0, min(1.0, new_x))
+                new_y = max(-1.0, min(1.0, new_y))
+                
+                # 第二步：应用响应曲线和范围限制（后处理范围）
+                # 计算原始输入的幅度用于响应曲线
+                if self.response_curve != 1.0:
+                    # 使用原始输入的幅度来计算响应曲线
+                    normalized = (max_abs - self.deadzone) / (1.0 - self.deadzone)
+                    scaled_magnitude = normalized ** self.response_curve
+                    final_scale = scaled_magnitude
+                else:
+                    # 线性响应
+                    final_scale = (max_abs - self.deadzone) / (1.0 - self.deadzone)
+                
+                # 应用外环阈值限制
+                final_scale = min(final_scale, self.outer_threshold)
+                
+                # 应用最终缩放
+                new_x *= final_scale
+                new_y *= final_scale
+                
+                return new_x, new_y
+        
+        return x, y
 
     def apply_circular_deadzone(self, x, y):
         """圆形死区处理"""
@@ -192,7 +415,7 @@ class AdvancedDeadzone:
             magnitude = scaled_magnitude * (1.0 - self.deadzone) + self.deadzone
 
         # 限制最大输出
-        magnitude = min(magnitude, 1.0)
+        magnitude = min(magnitude, self.outer_threshold)
 
         # 保持方向，应用缩放后的幅度
         if magnitude > 0:
@@ -201,7 +424,33 @@ class AdvancedDeadzone:
 
         return x, y
 
-# ==================== 初始化处理器 ====================
+# ==================== 输出增幅处理函数 ====================
+def apply_output_amplifier(x, y, stick_type):
+    """应用摇杆输出增幅"""
+    amplifier = OUTPUT_AMPLIFIER[stick_type]
+    
+    if amplifier != 1.0:
+        # 计算当前幅度
+        current_magnitude = max(abs(x), abs(y))
+        
+        if current_magnitude > 0:
+            # 应用增幅，但限制在有效范围内
+            new_x = x * amplifier
+            new_y = y * amplifier
+            
+            # 确保不超过[-1, 1]范围
+            new_x = max(-1.0, min(1.0, new_x))
+            new_y = max(-1.0, min(1.0, new_y))
+            
+            return new_x, new_y
+    
+    return x, y
+
+# ==================== 主程序 ====================
+# 自动识别摇杆范围
+JOYSTICK_PHYSICAL_LIMITS = calibrate_joystick_range()
+
+# 初始化处理器
 joystick_optimizer = JoystickRangeOptimizer(JOYSTICK_PHYSICAL_LIMITS)
 deadzone_processor = AdvancedDeadzone(**DEADZONE_CONFIG)
 
@@ -230,15 +479,26 @@ def process_joysticks_optimized(joystick):
         right_x = joystick.get_axis(2)
         right_y = joystick.get_axis(3)
 
-        # 应用范围归一化
+        # 应用范围归一化 - 使用准确的物理范围映射到[-1, 1]
         left_x = joystick_optimizer.normalize_joystick_value(left_x, 'x', 'left')
         left_y = joystick_optimizer.normalize_joystick_value(left_y, 'y', 'left')
         right_x = joystick_optimizer.normalize_joystick_value(right_x, 'x', 'right')
         right_y = joystick_optimizer.normalize_joystick_value(right_y, 'y', 'right')
 
-        # 应用死区算法
-        left_x, left_y = deadzone_processor.apply_circular_deadzone(left_x, left_y)
-        right_x, right_y = deadzone_processor.apply_circular_deadzone(right_x, right_y)
+        # 应用死区算法 - 根据开关选择方形或圆形死区
+        if SQUARE_DEADZONE_SWITCH['left_stick']:
+            left_x, left_y = deadzone_processor.apply_square_deadzone(left_x, left_y)
+        else:
+            left_x, left_y = deadzone_processor.apply_circular_deadzone(left_x, left_y)
+            
+        if SQUARE_DEADZONE_SWITCH['right_stick']:
+            right_x, right_y = deadzone_processor.apply_square_deadzone(right_x, right_y)
+        else:
+            right_x, right_y = deadzone_processor.apply_circular_deadzone(right_x, right_y)
+
+        # 应用输出增幅 - 新增步骤
+        left_x, left_y = apply_output_amplifier(left_x, left_y, 'left_stick')
+        right_x, right_y = apply_output_amplifier(right_x, right_y, 'right_stick')
 
         # 更新缓存
         stick_data_cache['left']['x'] = left_x
@@ -294,7 +554,6 @@ def update_virtual_gamepad():
 
         time.sleep(0.001)
 
-# ==================== 主程序 ====================
 # 启动高速更新线程
 update_thread = threading.Thread(target=update_virtual_gamepad, daemon=True)
 update_thread.start()
@@ -310,11 +569,22 @@ except ImportError:
     print("安装pyautogui: pip install pyautogui")
 
 # 打印配置信息
-print_configuration_info()
+print_configuration_info(JOYSTICK_PHYSICAL_LIMITS)
 
 try:
     print(f"优化版手柄映射已启动（{UPDATE_RATE}Hz 更新率）")
-    print("摇杆范围已优化，物理限制已补偿")
+    print("摇杆范围已自动识别，物理限制已补偿")
+    
+    # 显示方形死区状态
+    left_status = "开启" if SQUARE_DEADZONE_SWITCH['left_stick'] else "关闭"
+    right_status = "开启" if SQUARE_DEADZONE_SWITCH['right_stick'] else "关闭"
+    print(f"左摇杆方形死区: {left_status}")
+    print(f"右摇杆方形死区: {right_status}")
+    
+    # 显示输出增幅状态
+    print(f"左摇杆输出增幅: {OUTPUT_AMPLIFIER['left_stick']:.1f}x")
+    print(f"右摇杆输出增幅: {OUTPUT_AMPLIFIER['right_stick']:.1f}x")
+    
     print("扳机按钮: ZL=按钮13, ZR=按钮5")
     
     # 打印特殊按钮配置
