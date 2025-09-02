@@ -16,7 +16,7 @@ DEFAULT_PHYSICAL_LIMITS = {
 DEADZONE_CONFIG = {
     'left': {
         'deadzone': 0.03,
-        'outer_threshold': 0.9,
+        'outer_threshold': 0.95,
         'response_curve': 1.0
     },
     'right': {
@@ -37,7 +37,7 @@ OUTPUT_AMPLIFIER = {
 # 方形死区开关配置 (0=关闭, 1=开启)
 SQUARE_DEADZONE_SWITCH = {
     'left_stick': 1,   # 左摇杆方形死区开关
-    'right_stick': 1   # 右摇杆方形死区开关
+    'right_stick': 0   # 右摇杆方形死区开关
 }
 
 
@@ -437,10 +437,14 @@ class AdvancedDeadzone:
 
         # 保持方向，应用缩放后的幅度
         if magnitude > 0:
-            scale = magnitude / max(magnitude, 0.0001)  # 避免除零
-            return x * scale, y * scale
+            # 计算缩放比例
+            current_magnitude = (x**2 + y**2) ** 0.5
+            if current_magnitude > 0.0001:  # 避免除零
+                scale = magnitude / current_magnitude
+                return x * scale, y * scale
+            else:
+                return x, y
 
-        return x, y
 
 # ==================== 输出增幅处理函数 ====================
 def apply_output_amplifier(x, y, stick_type):
@@ -514,7 +518,7 @@ def process_joysticks_optimized(joystick):
         else:
             right_x, right_y = deadzone_processor.apply_circular_deadzone(right_x, right_y, 'right')
 
-        # 应用输出增幅 - 新增步骤
+        # 应用输出增幅
         left_x, left_y = apply_output_amplifier(left_x, left_y, 'left_stick')
         right_x, right_y = apply_output_amplifier(right_x, right_y, 'right_stick')
 
