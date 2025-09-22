@@ -1,0 +1,170 @@
+import pygame
+import time
+import threading
+try:
+    import pyautogui
+    USE_PYAUTOGUI = True
+    print("Using pyautogui for keyboard simulation")
+except ImportError:
+    USE_PYAUTOGUI = False
+    print("pyautogui not installed, using alternative methods")
+    print("Install: pip install pyautogui")
+
+# ==================== 配置区域 ====================
+# 按钮配置 - 根据您的检测结果修改这些值
+LEFT_STICK_BUTTON = 8    # 左摇杆按下按钮编号
+RIGHT_STICK_BUTTON = 9   # 右摇杆按下按钮编号  
+SPECIAL_BUTTON = 10      # 特殊按钮编号
+
+# 键盘映射
+STICK_COMBO_KEYS = ['t']          # 摇杆组合键映射到T键
+SPECIAL_COMBO_KEYS = ['alt', 'f10']  # 特殊按钮映射到Alt+F10
+
+# ==================== 初始化 ====================
+# 不创建显示窗口，只初始化pygame核心功能
+pygame.display.init()
+pygame.joystick.init()
+
+joystick_count = pygame.joystick.get_count()
+if joystick_count == 0:
+    print("No gamepad detected!")
+    exit()
+
+joystick = pygame.joystick.Joystick(0)
+joystick.init()
+
+print(f"Gamepad: {joystick.get_name()}")
+print(f"Total buttons: {joystick.get_numbuttons()}")
+print("\n=== Configuration ===")
+print(f"Left stick button: {LEFT_STICK_BUTTON}")
+print(f"Right stick button: {RIGHT_STICK_BUTTON}") 
+print(f"Special button: {SPECIAL_BUTTON}")
+print(f"Stick combo keys: {'+'.join(STICK_COMBO_KEYS).upper()}")
+print(f"Special combo keys: {'+'.join(SPECIAL_COMBO_KEYS).upper()}")
+print("\nPress both sticks simultaneously for T key")
+print(f"Press button {SPECIAL_BUTTON} for Alt+F10")
+print("Press Ctrl+C to exit\n")
+
+# 按钮状态跟踪
+button_states = [False] * joystick.get_numbuttons()
+stick_combo_active = False
+special_combo_active = False
+
+def simulate_key_press(keys, press=True):
+    """模拟键盘按键按下或释放"""
+    if USE_PYAUTOGUI:
+        if press:
+            for key in keys:
+                pyautogui.keyDown(key)
+        else:
+            for key in reversed(keys):
+                pyautogui.keyUp(key)
+    else:
+        # 备用方法：使用ctypes发送键盘输入
+        try:
+            import ctypes
+            from ctypes import wintypes
+            
+            # 虚拟键码映射
+            VK_MAPPING = {
+                'alt': 0x12,    # VK_MENU
+                'ctrl': 0x11,   # VK_CONTROL
+                'shift': 0x10,  # VK_SHIFT
+                'f10': 0x79,    # VK_F10
+                't': 0x54,      # 'T' key
+            }
+            
+            for key in keys:
+                vk_code = VK_MAPPING.get(key.lower(), 0)
+                if vk_code:
+                    if press:
+                        ctypes.windll.user32.keybd_event(vk_code, 0, 0, 0)
+                    else:
+                        ctypes.windll.user32.keybd_event(vk_code, 0, 2, 0)
+        except:
+            print("Keyboard simulation not available")
+
+# 高性能事件处理循环
+def gamepad_loop():
+    global stick_combo_active, special_combo_active
+    
+    print("Gamepad mapper started in background...")
+    
+    try:
+        while True:
+            # 处理事件队列（重要！）
+            pygame.event.pump()
+            
+            # 检查按钮状态
+            left_stick_pressed = False
+            right_stick_pressed = False
+            special_pressed = False
+            
+            # 快速检查所有按钮
+            for i in range(joystick.get_numbuttons()):
+                try:
+                    current_state = bool(joystick.get_button(i))
+                    
+                    if i == LEFT_STICK_BUTTON:
+                        left_stick_pressed = current_state
+                    elif i == RIGHT_STICK_BUTTON:
+                        right_stick_pressed = current_state
+                    elif i == SPECIAL_BUTTON:
+                        special_pressed = current_state
+                    
+                    button_states[i] = current_state
+                except:
+                    pass
+            
+            # 处理摇杆组合键
+            if left_stick_pressed and right_stick_pressed:
+                if not stick_combo_active:
+                    simulate_key_press(STICK_COMBO_KEYS, press=True)
+                    stick_combo_active = True
+                    key_names = '+'.join(STICK_COMBO_KEYS).upper()
+                    print(f"✓ Stick combo -> {key_names}")
+            else:
+                if stick_combo_active:
+                    simulate_key_press(STICK_COMBO_KEYS, press=False)
+                    stick_combo_active = False
+            
+            # 处理特殊按钮
+            if special_pressed:
+                if not special_combo_active:
+                    simulate_key_press(SPECIAL_COMBO_KEYS, press=True)
+                    special_combo_active = True
+                    key_names = '+'.join(SPECIAL_COMBO_KEYS).upper()
+                    print(f"✓ Special button -> {key_names}")
+            else:
+                if special_combo_active:
+                    simulate_key_press(SPECIAL_COMBO_KEYS, press=False)
+                    special_combo_active = False
+            
+            # 高效休眠
+            time.sleep(0.01)
+            
+    except KeyboardInterrupt:
+        pass
+    except Exception as e:
+        print(f"Error in gamepad loop: {e}")
+
+# 清理函数
+def cleanup():
+    # 释放所有可能卡住的按键
+    if stick_combo_active:
+        simulate_key_press(STICK_COMBO_KEYS, press=False)
+    if special_combo_active:
+        simulate_key_press(SPECIAL_COMBO_KEYS, press=False)
+    
+    pygame.quit()
+    print("\nGamepad mapper exited cleanly")
+
+# 主程序
+if __name__ == "__main__":
+    try:
+        # 启动游戏手柄循环
+        gamepad_loop()
+    except KeyboardInterrupt:
+        print("\nExiting...")
+    finally:
+        cleanup()
