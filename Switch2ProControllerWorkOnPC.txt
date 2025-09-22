@@ -4,6 +4,7 @@ import threading
 import math
 from collections import deque
 from vgamepad import VX360Gamepad, XUSB_BUTTON
+import numpy as np
 
 # ==================== 配置区域 ====================
 # 默认摇杆物理限制校准（防呆设计，使用0.8作为安全值）
@@ -34,14 +35,20 @@ DEADZONE_CONFIG = {
 
 # 摇杆输出增幅配置 (1.0=无增幅, 1.1=10%增幅, 0.9=10%衰减)
 OUTPUT_AMPLIFIER = {
-    'left_stick': 1.1,   # 左摇杆输出增幅
+    'left_stick': 1.0,   # 左摇杆输出增幅
     'right_stick': 1.0    # 右摇杆输出增幅
 }
 
 # 方形死区开关配置 (0=关闭, 1=开启)
 SQUARE_DEADZONE_SWITCH = {
     'left_stick': 1,   # 左摇杆方形死区开关
-    'right_stick': 1   # 右摇杆方形死区开关
+    'right_stick': 0   # 右摇杆方形死区开关
+}
+
+# 方形映射强度配置 (0.0=纯圆, 1.0=纯方, 中间值=混合)
+SQUARE_MAPPING_STRENGTH = {
+    'left_stick': 0.3,   # 左摇杆方形映射强度
+    'right_stick': 0.3   # 右摇杆方形映射强度
 }
 
 # 更新率配置
@@ -407,6 +414,62 @@ class AdvancedDeadzone:
             else:
                 return x, y
 
+# ==================== 方形映射处理函数 ====================
+def apply_square_mapping(x, y, strength):
+    """
+    将圆形摇杆输出转换为方形输出，支持强度调节
+    强度为0.0时：纯圆形输出
+    强度为1.0时：纯方形输出
+    中间值：圆形和方形的混合
+    """
+    if x == 0 and y == 0:
+        return 0.0, 0.0
+    
+    # 如果强度为0，直接返回原始值（纯圆形）
+    if strength == 0.0:
+        return x, y
+    
+    # 计算当前点的角度和幅度
+    angle = math.atan2(y, x)
+    magnitude = math.sqrt(x*x + y*y)
+    
+    # 计算方形映射后的最大可能幅度
+    # 在45度角时，圆形和方形的比例是1:√2 ≈ 1:1.414
+    abs_cos = abs(math.cos(angle))
+    abs_sin = abs(math.sin(angle))
+    
+    if abs_cos > abs_sin:
+        scale = 1.0 / abs_cos
+    else:
+        scale = 1.0 / abs_sin
+    
+    # 计算纯方形映射后的坐标
+    square_x = x * scale
+    square_y = y * scale
+    
+    # 确保方形映射后的值在[-1, 1]范围内
+    square_x = max(-1.0, min(1.0, square_x))
+    square_y = max(-1.0, min(1.0, square_y))
+    
+    # 如果强度为1，直接返回纯方形映射结果
+    if strength == 1.0:
+        return square_x, square_y
+    
+    # 强度在0和1之间时，进行线性插值
+    # 计算插值权重
+    circular_weight = 1.0 - strength
+    square_weight = strength
+    
+    # 线性插值
+    result_x = x * circular_weight + square_x * square_weight
+    result_y = y * circular_weight + square_y * square_weight
+    
+    # 确保结果在[-1, 1]范围内
+    result_x = max(-1.0, min(1.0, result_x))
+    result_y = max(-1.0, min(1.0, result_y))
+    
+    return result_x, result_y
+
 # ==================== 输出增幅处理函数 ====================
 def apply_output_amplifier(x, y, stick_type):
     """应用摇杆输出增幅"""
@@ -480,6 +543,15 @@ def process_joysticks_optimized(joystick):
         left_y = joystick_optimizer.normalize_joystick_value(left_y, 'y', 'left')
         right_x = joystick_optimizer.normalize_joystick_value(right_x, 'x', 'right')
         right_y = joystick_optimizer.normalize_joystick_value(right_y, 'y', 'right')
+
+        # 应用方形映射 - 根据强度调节圆形到方形的过渡
+        left_strength = SQUARE_MAPPING_STRENGTH['left_stick']
+        right_strength = SQUARE_MAPPING_STRENGTH['right_stick']
+        
+        if left_strength > 0.0:
+            left_x, left_y = apply_square_mapping(left_x, left_y, left_strength)
+        if right_strength > 0.0:
+            right_x, right_y = apply_square_mapping(right_x, right_y, right_strength)
 
         # 应用死区算法
         if SQUARE_DEADZONE_SWITCH['left_stick']:
@@ -582,6 +654,14 @@ try:
     right_status = "开启" if SQUARE_DEADZONE_SWITCH['right_stick'] else "关闭"
     print(f"左摇杆方形死区: {left_status}")
     print(f"右摇杆方形死区: {right_status}")
+    
+    # 显示方形映射强度
+    left_strength = SQUARE_MAPPING_STRENGTH['left_stick']
+    right_strength = SQUARE_MAPPING_STRENGTH['right_stick']
+    left_map_desc = f"{left_strength:.1f} ({'纯圆' if left_strength == 0.0 else '纯方' if left_strength == 1.0 else '混合'})"
+    right_map_desc = f"{right_strength:.1f} ({'纯圆' if right_strength == 0.0 else '纯方' if right_strength == 1.0 else '混合'})"
+    print(f"左摇杆方形映射强度: {left_map_desc}")
+    print(f"右摇杆方形映射强度: {right_map_desc}")
     
     # 显示输出增幅状态
     print(f"左摇杆输出增幅: {OUTPUT_AMPLIFIER['left_stick']:.1f}x")
