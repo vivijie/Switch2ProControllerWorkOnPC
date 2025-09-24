@@ -40,8 +40,9 @@ OUTPUT_AMPLIFIER = {
 }
 
 # 方形死区开关配置 (0=关闭, 1=开启)
+# 因为本身已经做了0.8到1.0的映射，不开方形输出就能得到其他手柄方形输出的加速度。建议不开启方形死区
 SQUARE_DEADZONE_SWITCH = {
-    'left_stick': 1,   # 左摇杆方形死区开关
+    'left_stick': 0,   # 左摇杆方形死区开关
     'right_stick': 0   # 右摇杆方形死区开关
 }
 
